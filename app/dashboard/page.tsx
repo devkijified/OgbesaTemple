@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { createClient } from '../../../lib/supabase'
+import { createClient } from '../../lib/supabase'
 
 interface Consultation {
   id: string
@@ -10,8 +10,9 @@ interface Consultation {
   ebo_details: string
   consultation_date: string
   notes: string
-  client: { full_name: string; email: string; phone: string }
-  omo_awo: { full_name: string; omo_awo_level: string }
+  status: string
+  client?: { full_name: string; email: string }
+  omo_awo?: { full_name: string; omo_awo_level: string }
 }
 
 interface Profile {
@@ -21,24 +22,21 @@ interface Profile {
   role: string
   omo_awo_level: string
   phone: string
-  created_at: string
+  initiator_id: string
+  initiator?: { full_name: string }
 }
 
-export default function PriestDashboard() {
+export default function Dashboard() {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [consultations, setConsultations] = useState<Consultation[]>([])
-  const [clients, setClients] = useState<Profile[]>([])
-  const [omoAwos, setOmoAwos] = useState<Profile[]>([])
+  const [myConsultations, setMyConsultations] = useState<Consultation[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [stats, setStats] = useState({ totalConsultations: 0, totalClients: 0, totalOmoAwos: 0 })
+  const [activeTab, setActiveTab] = useState('received')
   
   const [formData, setFormData] = useState({
-    client_id: '',
     client_email: '',
     client_name: '',
-    client_phone: '',
-    omo_awo_id: '',
     odu_ifa: '',
     omo_awo_label: '',
     appeasement: '',
@@ -49,69 +47,52 @@ export default function PriestDashboard() {
   const supabase = createClient()
 
   useEffect(() => {
-    fetchAllData()
+    fetchData()
   }, [])
 
-  const fetchAllData = async () => {
+  const fetchData = async () => {
     setLoading(true)
     
-    // Get current user profile
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
       const { data: profile } = await supabase
         .from('profiles')
-        .select('*')
+        .select('*, initiator:profiles!profiles_initiator_id_fkey (full_name)')
         .eq('id', user.id)
         .single()
       setProfile(profile)
+      
+      // If OMO AWO - get consultations they performed
+      if (profile?.role === 'omo_awo') {
+        const { data: performed } = await supabase
+          .from('consultations')
+          .select(`*, client:profiles!consultations_client_id_fkey (full_name, email)`)
+          .eq('omo_awo_id', user.id)
+          .order('consultation_date', { ascending: false })
+        
+        if (performed) setMyConsultations(performed)
+      }
+      
+      // Get consultations where user is the client
+      const { data: received } = await supabase
+        .from('consultations')
+        .select(`*, omo_awo:profiles!consultations_omo_awo_id_fkey (full_name, omo_awo_level)`)
+        .eq('client_id', user.id)
+        .order('consultation_date', { ascending: false })
+      
+      if (received) setConsultations(received)
     }
-    
-    // Fetch all consultations with client and omo awo info
-    const { data: consultationsData } = await supabase
-      .from('consultations')
-      .select(`
-        *,
-        client:profiles!consultations_client_id_fkey (full_name, email, phone),
-        omo_awo:profiles!consultations_omo_awo_id_fkey (full_name, omo_awo_level)
-      `)
-      .order('consultation_date', { ascending: false })
-    
-    if (consultationsData) setConsultations(consultationsData)
-    
-    // Fetch all clients (abore)
-    const { data: clientsData } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('role', 'abore')
-      .order('created_at', { ascending: false })
-    
-    if (clientsData) setClients(clientsData)
-    
-    // Fetch all OMO AWO initiates
-    const { data: omoAwosData } = await supabase
-      .from('profiles')
-      .select('*')
-      .in('role', ['omo_awo', 'babalawo'])
-      .order('created_at', { ascending: false })
-    
-    if (omoAwosData) setOmoAwos(omoAwosData)
-    
-    // Set stats
-    setStats({
-      totalConsultations: consultationsData?.length || 0,
-      totalClients: clientsData?.length || 0,
-      totalOmoAwos: omoAwosData?.length || 0
-    })
-    
     setLoading(false)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     
-    let clientId = formData.client_id
+    const { data: { user } } = await supabase.auth.getUser()
     
-    if (!clientId && formData.client_email) {
+    let clientId = profile?.id
+    
+    if (formData.client_email && formData.client_email !== profile?.email) {
       const { data: existingClient } = await supabase
         .from('profiles')
         .select('id')
@@ -132,57 +113,82 @@ export default function PriestDashboard() {
             id: clientId, 
             full_name: formData.client_name || formData.client_email.split('@')[0], 
             email: formData.client_email, 
-            phone: formData.client_phone,
             role: 'abore' 
           })
         }
       }
     }
     
-    if (clientId) {
-      const { error } = await supabase.from('consultations').insert({
-        client_id: clientId,
-        omo_awo_id: formData.omo_awo_id || profile?.id,
-        odu_ifa: formData.odu_ifa,
-        omo_awo_label: formData.omo_awo_label,
-        appeasement: formData.appeasement,
-        ebo_details: formData.ebo_details,
-        notes: formData.notes,
-        consultation_date: new Date().toISOString().split('T')[0]
-      })
+    let omoAwoId = profile?.role === 'omo_awo' ? profile?.id : null
+    
+    if (profile?.role === 'abore') {
+      const { data: availableOmoAwo } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('role', 'omo_awo')
+        .limit(1)
+        .single()
       
-      if (!error) {
-        alert('Consultation recorded successfully!')
-        setShowForm(false)
-        setFormData({
-          client_id: '', client_email: '', client_name: '', client_phone: '',
-          omo_awo_id: '', odu_ifa: '', omo_awo_label: '', appeasement: '', ebo_details: '', notes: ''
-        })
-        fetchAllData()
-      } else {
-        alert('Error: ' + error.message)
+      if (availableOmoAwo) {
+        omoAwoId = availableOmoAwo.id
       }
+    }
+    
+    const { error } = await supabase.from('consultations').insert({
+      client_id: clientId,
+      omo_awo_id: omoAwoId,
+      odu_ifa: formData.odu_ifa || 'Awaiting Divination',
+      omo_awo_label: formData.omo_awo_label || 'Awaiting Assessment',
+      appeasement: formData.appeasement,
+      ebo_details: formData.ebo_details,
+      notes: formData.notes,
+      status: profile?.role === 'abore' ? 'pending' : 'completed',
+      consultation_date: new Date().toISOString().split('T')[0]
+    })
+    
+    if (!error) {
+      alert(profile?.role === 'abore' ? 'Consultation requested! An OMO AWO will attend to you.' : 'Consultation recorded successfully!')
+      setShowForm(false)
+      setFormData({ client_email: '', client_name: '', odu_ifa: '', omo_awo_label: '', appeasement: '', ebo_details: '', notes: '' })
+      fetchData()
+    } else {
+      alert('Error: ' + error.message)
     }
   }
 
+  const getRoleTitle = () => {
+    if (profile?.role === 'omo_awo') return `OMO AWO - ${profile?.omo_awo_level || 'Initiate'}`
+    return 'Abore (Seeker)'
+  }
+
+  const getRoleColor = () => {
+    if (profile?.role === 'omo_awo') return '#4a1d1d'
+    return '#78350f'
+  }
+
+  const canGiveConsultations = profile?.role === 'omo_awo'
+  const canRequestConsultations = true
+
   if (loading) {
-    return <div style={{ minHeight: '100vh', backgroundColor: '#fffbeb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ color: '#78350f' }}>Loading sacred records...</div>
-    </div>
+    return (
+      <div style={{ minHeight: '100vh', backgroundColor: '#fffbeb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: '#78350f' }}>Loading...</div>
+      </div>
+    )
   }
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#fffbeb' }}>
       {/* Header */}
-      <div style={{ backgroundColor: '#1a1a2e', color: 'white', padding: '16px' }}>
-        <div style={{ maxWidth: '1400px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+      <div style={{ backgroundColor: getRoleColor(), color: 'white', padding: '16px' }}>
+        <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <div>
             <h1 style={{ fontSize: '24px', fontWeight: 'bold' }}>OGBESA Temple</h1>
-            <p style={{ fontSize: '14px', color: '#fcd34d' }}>Babalawo Priest Console</p>
+            <p style={{ fontSize: '14px', color: '#fcd34d' }}>{getRoleTitle()}</p>
           </div>
           <div style={{ display: 'flex', gap: '12px' }}>
             <button onClick={() => setShowForm(!showForm)} style={{ backgroundColor: '#d97706', padding: '8px 16px', borderRadius: '8px', border: 'none', color: 'white', cursor: 'pointer' }}>
-              {showForm ? 'Cancel' : '+ New Consultation'}
+              {showForm ? 'Cancel' : canGiveConsultations ? '+ New Consultation' : '+ Request Consultation'}
             </button>
             <button onClick={() => supabase.auth.signOut().then(() => window.location.href = '/')} style={{ backgroundColor: '#92400e', padding: '8px 16px', borderRadius: '8px', border: 'none', color: 'white', cursor: 'pointer' }}>
               Logout
@@ -191,104 +197,128 @@ export default function PriestDashboard() {
         </div>
       </div>
       
-      <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '24px' }}>
-        {/* Stats Cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px', marginBottom: '24px' }}>
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '20px', textAlign: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-            <div style={{ fontSize: '36px' }}>📜</div>
-            <div style={{ fontSize: '28px', fontWeight: 'bold', color: '#78350f' }}>{stats.totalConsultations}</div>
-            <div style={{ color: '#6b7280' }}>Total Consultations</div>
-          </div>
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '20px', textAlign: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-            <div style={{ fontSize: '36px' }}>👥</div>
-            <div style={{ fontSize: '28px', fontWeight: 'bold', color: '#78350f' }}>{stats.totalClients}</div>
-            <div style={{ color: '#6b7280' }}>Registered Seekers</div>
-          </div>
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '20px', textAlign: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-            <div style={{ fontSize: '36px' }}>🔮</div>
-            <div style={{ fontSize: '28px', fontWeight: 'bold', color: '#78350f' }}>{stats.totalOmoAwos}</div>
-            <div style={{ color: '#6b7280' }}>OMO AWO Initiates</div>
+      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
+        {/* Welcome Card */}
+        <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', marginBottom: '24px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+          <h2 style={{ fontSize: '28px', fontWeight: 'bold', color: '#78350f', marginBottom: '8px' }}>
+            Àbọ̀̀, {profile?.full_name?.split(' ')[0] || profile?.email?.split('@')[0]}
+          </h2>
+          <p style={{ color: '#b45309', fontWeight: '500' }}>{getRoleTitle()}</p>
+          
+          {profile?.role === 'omo_awo' && profile?.initiator && (
+            <p style={{ color: '#6b7280', fontSize: '14px', marginTop: '8px' }}>
+              Initiated by: {profile.initiator.full_name}
+            </p>
+          )}
+          
+          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#fef3c7', borderRadius: '8px' }}>
+            <p style={{ fontSize: '14px', color: '#92400e' }}>
+              {profile?.role === 'omo_awo' && '📿 You are OMO AWO - an initiate. You can record consultations and guide seekers.'}
+              {profile?.role === 'abore' && '🔮 You are a Seeker. Request consultations and view your sacred records.'}
+            </p>
           </div>
         </div>
         
-        {/* New Consultation Form */}
+        {/* Form */}
         {showForm && (
           <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', marginBottom: '24px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-            <h3 style={{ fontSize: '20px', fontWeight: '600', color: '#78350f', marginBottom: '16px' }}>Record New Ifa Consultation</h3>
+            <h3 style={{ fontSize: '20px', fontWeight: '600', color: '#78350f', marginBottom: '16px' }}>
+              {canGiveConsultations ? 'Record Consultation' : 'Request Consultation'}
+            </h3>
             <form onSubmit={handleSubmit}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Select Seeker</label>
-                  <select value={formData.client_id} onChange={(e) => setFormData({...formData, client_id: e.target.value, client_email: '', client_name: ''})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }}>
-                    <option value="">-- Select Client --</option>
-                    {clients.map(client => <option key={client.id} value={client.id}>{client.full_name} ({client.email})</option>)}
-                  </select>
+              {canGiveConsultations && (
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Seeker Email</label>
+                  <input type="email" value={formData.client_email} onChange={(e) => setFormData({...formData, client_email: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }} />
                 </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Or New Seeker Email</label>
-                  <input type="email" value={formData.client_email} onChange={(e) => setFormData({...formData, client_email: e.target.value, client_id: ''})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }} />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>OMO AWO (Priest)</label>
-                  <select value={formData.omo_awo_id} onChange={(e) => setFormData({...formData, omo_awo_id: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }}>
-                    <option value="">-- Select OMO AWO --</option>
-                    {omoAwos.map(omo => <option key={omo.id} value={omo.id}>{omo.full_name} ({omo.omo_awo_level || omo.role})</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Odu Ifa</label>
-                  <input type="text" required value={formData.odu_ifa} onChange={(e) => setFormData({...formData, odu_ifa: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }} />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>OMO AWO Label</label>
-                  <select value={formData.omo_awo_label} onChange={(e) => setFormData({...formData, omo_awo_label: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }}>
-                    <option value="">-- Select Label --</option>
-                    <option value="OMO AWO Alafia">OMO AWO Alafia - Peace</option>
-                    <option value="OMO AWO Aduro">OMO AWO Aduro - Healing</option>
-                    <option value="OMO AWO Ose">OMO AWO Ose - Thanksgiving</option>
-                    <option value="OMO AWO Otura">OMO AWO Otura - Guidance</option>
-                    <option value="OMO AWO Irosun">OMO AWO Irosun - Cleansing</option>
-                    <option value="OMO AWO Obara">OMO AWO Obara - Prosperity</option>
-                    <option value="OMO AWO Odi">OMO AWO Odi - Justice</option>
-                    <option value="OMO AWO Iwori">OMO AWO Iwori - Wisdom</option>
-                  </select>
-                </div>
+              )}
+              
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Odu Ifa</label>
+                <input type="text" required={canGiveConsultations} value={formData.odu_ifa} onChange={(e) => setFormData({...formData, odu_ifa: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }} placeholder={canGiveConsultations ? "e.g., Eji Ogbe" : "Optional"} />
               </div>
-              <div style={{ marginTop: '16px' }}>
-                <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Appeasement / Ebo</label>
-                <textarea rows={3} value={formData.appeasement} onChange={(e) => setFormData({...formData, appeasement: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }} />
+              
+              {canGiveConsultations && (
+                <>
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>OMO AWO Label</label>
+                    <select value={formData.omo_awo_label} onChange={(e) => setFormData({...formData, omo_awo_label: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }}>
+                      <option value="">-- Select --</option>
+                      <option value="OMO AWO Alafia">OMO AWO Alafia - Peace</option>
+                      <option value="OMO AWO Aduro">OMO AWO Aduro - Healing</option>
+                      <option value="OMO AWO Ose">OMO AWO Ose - Thanksgiving</option>
+                      <option value="OMO AWO Otura">OMO AWO Otura - Guidance</option>
+                      <option value="OMO AWO Irosun">OMO AWO Irosun - Cleansing</option>
+                      <option value="OMO AWO Obara">OMO AWO Obara - Prosperity</option>
+                      <option value="OMO AWO Odi">OMO AWO Odi - Justice</option>
+                      <option value="OMO AWO Iwori">OMO AWO Iwori - Wisdom</option>
+                    </select>
+                  </div>
+                  
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Appeasement</label>
+                    <textarea rows={3} value={formData.appeasement} onChange={(e) => setFormData({...formData, appeasement: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }} />
+                  </div>
+                </>
+              )}
+              
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>Notes</label>
+                <textarea rows={2} value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} style={{ width: '100%', padding: '10px', border: '1px solid #d1d5db', borderRadius: '8px' }} />
               </div>
-              <button type="submit" style={{ marginTop: '16px', backgroundColor: '#92400e', color: 'white', padding: '12px 24px', borderRadius: '8px', border: 'none', fontWeight: '600', cursor: 'pointer' }}>Save Consultation</button>
+              
+              <button type="submit" style={{ backgroundColor: '#92400e', color: 'white', padding: '12px 24px', borderRadius: '8px', border: 'none', fontWeight: '600', cursor: 'pointer' }}>
+                {canGiveConsultations ? 'Save' : 'Submit Request'}
+              </button>
             </form>
           </div>
         )}
         
-        {/* Consultations Table */}
-        <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', overflowX: 'auto' }}>
-          <h3 style={{ fontSize: '20px', fontWeight: '600', color: '#78350f', marginBottom: '16px' }}>All Consultations</h3>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
-                <th style={{ padding: '12px' }}>Date</th>
-                <th style={{ padding: '12px' }}>Seeker</th>
-                <th style={{ padding: '12px' }}>Odu Ifa</th>
-                <th style={{ padding: '12px' }}>OMO AWO Label</th>
-                <th style={{ padding: '12px' }}>Priest</th>
-              </tr>
-            </thead>
-            <tbody>
-              {consultations.map((c) => (
-                <tr key={c.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                  <td style={{ padding: '12px' }}>{new Date(c.consultation_date).toLocaleDateString()}</td>
-                  <td style={{ padding: '12px' }}>{c.client?.full_name}</td>
-                  <td style={{ padding: '12px', fontWeight: '500' }}>{c.odu_ifa}</td>
-                  <td style={{ padding: '12px' }}>{c.omo_awo_label}</td>
-                  <td style={{ padding: '12px' }}>{c.omo_awo?.full_name}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', borderBottom: '2px solid #e5e7eb' }}>
+          <button onClick={() => setActiveTab('received')} style={{ padding: '12px 20px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontWeight: activeTab === 'received' ? '600' : '400', color: activeTab === 'received' ? '#92400e' : '#6b7280', borderBottom: activeTab === 'received' ? '2px solid #92400e' : 'none' }}>📋 Received</button>
+          {canGiveConsultations && <button onClick={() => setActiveTab('given')} style={{ padding: '12px 20px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontWeight: activeTab === 'given' ? '600' : '400', color: activeTab === 'given' ? '#92400e' : '#6b7280', borderBottom: activeTab === 'given' ? '2px solid #92400e' : 'none' }}>📿 Given</button>}
         </div>
+        
+        {/* Received Tab */}
+        {activeTab === 'received' && (
+          <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <h3 style={{ fontSize: '20px', fontWeight: '600', color: '#78350f', marginBottom: '16px' }}>Consultations Received</h3>
+            {consultations.length === 0 ? (
+              <p style={{ color: '#6b7280', textAlign: 'center', padding: '40px' }}>No consultations yet.</p>
+            ) : (
+              consultations.map((c) => (
+                <div key={c.id} style={{ borderLeft: '4px solid #d97706', paddingLeft: '16px', marginBottom: '16px', padding: '12px', backgroundColor: '#fffbeb', borderRadius: '8px' }}>
+                  <p><strong>Odu:</strong> {c.odu_ifa}</p>
+                  {c.omo_awo_label !== 'Awaiting Assessment' && <p><strong>Label:</strong> {c.omo_awo_label}</p>}
+                  {c.appeasement && <p><strong>Appeasement:</strong> {c.appeasement}</p>}
+                  {c.omo_awo && <p><strong>OMO AWO:</strong> {c.omo_awo.full_name}</p>}
+                  {c.status === 'pending' && <p style={{ color: '#d97706' }}>⏳ Pending</p>}
+                  <p style={{ fontSize: '12px', color: '#9ca3af' }}>{new Date(c.consultation_date).toLocaleDateString()}</p>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+        
+        {/* Given Tab */}
+        {activeTab === 'given' && canGiveConsultations && (
+          <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <h3 style={{ fontSize: '20px', fontWeight: '600', color: '#78350f', marginBottom: '16px' }}>Consultations Given</h3>
+            {myConsultations.length === 0 ? (
+              <p style={{ color: '#6b7280', textAlign: 'center', padding: '40px' }}>No consultations given yet.</p>
+            ) : (
+              myConsultations.map((c) => (
+                <div key={c.id} style={{ borderLeft: '4px solid #b45309', paddingLeft: '16px', marginBottom: '16px', padding: '12px', backgroundColor: '#fffbeb', borderRadius: '8px' }}>
+                  <p><strong>Odu:</strong> {c.odu_ifa}</p>
+                  <p><strong>Label:</strong> {c.omo_awo_label}</p>
+                  {c.client && <p><strong>Seeker:</strong> {c.client.full_name}</p>}
+                  <p style={{ fontSize: '12px', color: '#9ca3af' }}>{new Date(c.consultation_date).toLocaleDateString()}</p>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

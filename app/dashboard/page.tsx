@@ -323,3 +323,11 @@ export default function Dashboard() {
     </div>
   )
 }
+// Add this at the bottom of the dashboard, before the closing div
+{profile?.role === 'babalawo' && (
+  <div style={{ marginTop: '24px', textAlign: 'center' }}>
+    <a href="/admin" style={{ color: '#92400e', textDecoration: 'underline' }}>
+      Go to Admin Panel →
+    </a>
+  </div>
+)}

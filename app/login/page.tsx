@@ -1,7 +1,6 @@
 'use client'
 import { useState } from 'react'
 import { createClient } from '../../lib/supabase'
-import Link from 'next/link'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -26,50 +25,39 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100 flex items-center justify-center p-4">
-      <div className="max-w-md w-full">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-amber-800/10 mb-4">
-            <span className="text-2xl">🔮</span>
-          </div>
-          <h1 className="text-3xl font-bold text-amber-900">OGBESA</h1>
-          <p className="text-amber-700">Enter the Sacred Portal</p>
+    <div style={{ minHeight: '100vh', backgroundColor: '#fffbeb', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+      <div style={{ maxWidth: '400px', width: '100%' }}>
+        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+          <h1 style={{ fontSize: '36px', fontWeight: 'bold', color: '#78350f', marginBottom: '8px' }}>OGBESA</h1>
+          <p style={{ color: '#b45309' }}>Enter the Sacred Portal</p>
         </div>
         
-        {/* Login Form */}
-        <div className="bg-white rounded-2xl shadow-xl p-8">
+        <div style={{ backgroundColor: 'white', borderRadius: '16px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', padding: '32px' }}>
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 text-sm">
+            <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', padding: '12px', borderRadius: '8px', marginBottom: '24px', fontSize: '14px' }}>
               {error}
             </div>
           )}
           
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Email Address
-              </label>
+          <form onSubmit={handleLogin}>
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '8px' }}>Email Address</label>
               <input 
                 type="email" 
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-all"
-                placeholder="seeker@ogbesa.com"
+                style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '16px' }}
                 required 
               />
             </div>
             
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Password
-              </label>
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '8px' }}>Password</label>
               <input 
                 type="password" 
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-all"
-                placeholder="••••••••"
+                style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '16px' }}
                 required 
               />
             </div>
@@ -77,15 +65,11 @@ export default function Login() {
             <button 
               type="submit" 
               disabled={loading}
-              className="w-full bg-amber-800 hover:bg-amber-900 text-white font-semibold py-3 rounded-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ width: '100%', backgroundColor: '#92400e', color: 'white', padding: '12px', borderRadius: '8px', border: 'none', fontSize: '16px', fontWeight: '600', cursor: 'pointer' }}
             >
-              {loading ? 'Entering...' : 'Enter Temple'}
+              {loading ? 'Loading...' : 'Enter Temple'}
             </button>
           </form>
-          
-          <div className="mt-6 text-center text-sm text-gray-500">
-            Protected by ancestral wisdom
-          </div>
         </div>
       </div>
     </div>
